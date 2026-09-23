@@ -185,7 +185,7 @@ The VMM interacts with the Windows Hypervisor Platform through a strict sequence
 - **Addressing Mode**: Segmented addressing where physical address = `Segment * 16 + Offset`.
 - **I/O Mechanism**: Port-mapped I/O (`in` and `out` assembly instructions).
 - **Console Transport**: Standard PC COM1 UART at I/O port `0x3F8`. The guest writes characters sequentially to this port.
-- **Termination**: The guest issues a `hlt` instruction. When interrupts are disabled (`cli`) or unconfigured, `hlt` suspends CPU execution indefinitely, triggering a clean VM exit to the hypervisor host.
+- **Termination**: The guest issues a `hlt` instruction. Phase 1 initializes `RFLAGS` with IF clear and provides no interrupt source, so the halt produces a clean VM exit to the hypervisor host.
 
 ---
 
@@ -197,10 +197,10 @@ During `WHvRunVirtualProcessor`, hardware virtualization traps certain operation
 Occurs when the guest executes `in` or `out` instructions:
 - **Port Matching**: Checked against `0x3F8`–`0x3FF` via `SerialConsole::ownsPort(port)`.
 - **Write Operations (`AccessInfo.IsWrite == 1`)**:
-  - If `Port == 0x3F8`, the transmitted character is extracted from `ExitContext.IoPortAccess.Data` and forwarded to `SerialConsole::handleWrite()`, which writes it to host `stdout`.
+  - A one-byte write to `Port == 0x3F8` is extracted from the low byte of `ExitContext.IoPortAccess.Rax` and forwarded to `SerialConsole::handleWrite()`, which writes it to host `stdout`.
 - **Read Operations (`AccessInfo.IsWrite == 0`)**:
-  - If `Port == 0x3FD` (Line Status Register), VMM returns `0x60` (Transmitter Empty and Transmitter Holding Register Empty) to satisfy polling loops.
-- **Instruction Pointer Advance**: WHP provides `ExitContext.VpContext.InstructionLength`. The VMM increments `RIP` by this length using `WHvSetVirtualProcessorRegisters` to resume past the I/O instruction.
+  - Unsupported in Phase 1. The bundled guest performs only COM1 transmit writes, and any read is reported as an error rather than being silently emulated.
+- **I/O Exit Resume**: WHP reports a port-I/O exit after the I/O instruction has executed, so `ExitContext.VpContext.Rip` already identifies the next instruction. The VMM routes only one-byte COM1 writes and resumes without modifying `RIP`.
 
 ### 5.2 `WHvRunVpExitReasonHalt`
 Occurs when the guest executes `hlt`:
@@ -208,8 +208,8 @@ Occurs when the guest executes `hlt`:
 - The VMM logs successful shutdown and exits the execution run loop with a success status.
 
 ### 5.3 Memory Access Faults & Unexpected Exits
-- `WHvRunVpExitReasonMemoryAccess`: Indicates unmapped GPA access or violation of page protection permissions. VMM logs GPA, fault flags, and aborts.
-- `WHvRunVpExitReasonUnrecoverableException` / `WHvRunVpExitReasonInvalidVpRegisterValue`: Indicates architectural fault or invalid CPU state; VMM dumps register state and exits.
+- `WHvRunVpExitReasonMemoryAccess`: Indicates unmapped GPA access or violation of page protection permissions. VMM logs the GPA and RIP, then aborts.
+- Any other exit reason is reported with its RIP and treated as a failure.
 
 ---
 
@@ -256,7 +256,7 @@ Setting up x86 real mode within a hardware-virtualized partition (VMX/SVM) requi
 | `GS` | Selector: `0x0000`, Base: `0x0`, Limit: `0xFFFF`, Attr: `0x0093` (Data, Read/Write) | Real-mode 64KB segment descriptor |
 | `SS` | Selector: `0x0000`, Base: `0x0`, Limit: `0xFFFF`, Attr: `0x0093` (Data, Read/Write) | Real-mode 64KB stack segment descriptor |
 | `RSP` | `0x00007C00` | Stack pointer top |
-| `GDTR` | Base: `0x0`, Limit: `0xFFFF` | Flat limit |
+| `GDTR` | Base: `0x0`, Limit: `0x0000` | Unused in real mode |
 | `IDTR` | Base: `0x0`, Limit: `0x03FF` | Real-mode IVT limit (1024 bytes) |
 
 ---
@@ -277,7 +277,7 @@ Setting up x86 real mode within a hardware-virtualized partition (VMX/SVM) requi
 ## 9. Known Limitations (Phase 1)
 
 1. **Single vCPU**: Exactly one virtual processor (index 0) is created and scheduled.
-2. **No Hardware Interrupts**: Virtual 8259 PIC or APIC is not emulated; interrupts remain masked (`cli`).
+2. **No Hardware Interrupts**: Virtual 8259 PIC or APIC is not emulated; the initial guest `RFLAGS` has IF clear.
 3. **No Protected or Long Mode**: Paging, segmentation descriptors beyond flat 16-bit, and 64-bit page translation are not implemented.
 4. **No Block or Storage Devices**: The guest runs entirely out of initial RAM loaded at start; no virtual disk or NVMe controller is attached.
 5. **Synchronous Run Loop**: The VMM execution thread blocks on `WHvRunVirtualProcessor` until a VM exit occurs.

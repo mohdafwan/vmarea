@@ -63,12 +63,16 @@ if(WIN32)
 
         target_link_libraries(vmarea-tests PRIVATE WinHvPlatform)
 
+        if(TARGET guest_kernel)
+            add_dependencies(vmarea-tests guest_kernel)
+        endif()
+
         set_target_properties(vmarea-tests PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
         )
 
         enable_testing()
-        add_test(NAME VMAreaTests COMMAND vmarea-tests)
+        add_test(NAME VMAreaTests COMMAND vmarea-tests "${CMAKE_BINARY_DIR}/guest_kernel.bin")
     endif()
 else()
     message(STATUS "Note: Windows Hypervisor Platform (WHP) VMM targets require Windows.")

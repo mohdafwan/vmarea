@@ -98,7 +98,8 @@ This script performs the following tasks:
 Artifacts generated:
 - `build\guest_kernel.bin` — Raw 16-bit real-mode guest binary.
 - `build\bin\Release\run-vm.exe` — Virtual machine launcher executable.
-- `build\bin\Release\test_vmm.exe` — Unit and integration test runner.
+- `build\bin\Release\vmarea-tests.exe` — Windows WHP integration test runner.
+- `build\bin\vmarea-sim-tests.exe` — Cross-platform serial-console and guest simulation test runner.
 
 ---
 
@@ -163,13 +164,13 @@ test.cmd
 
 Or execute the test binary manually:
 ```cmd
-build\bin\Release\test_vmm.exe
+build\bin\Release\vmarea-tests.exe build\guest_kernel.bin
 ```
 
 The test runner exercises:
 - Serial console buffer handling and I/O port address decoding.
-- Memory allocation, alignment, and mapping calculations.
-- Hypervisor capability checks (gracefully skips WHP-dependent tests if platform virtualization is unavailable).
+- Guest-memory allocation and GPA mapping through the native WHP lifecycle tests.
+- A complete WHP partition lifecycle and native guest boot when WHP is available. WHP-dependent tests report **SKIP** (rather than pass) when the Windows host or hypervisor is unavailable.
 
 ---
 
