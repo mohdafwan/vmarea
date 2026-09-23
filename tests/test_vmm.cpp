@@ -1,171 +1,88 @@
-// VMArea Phase 1 — Test Suite
-// Minimal test framework with unit and integration tests.
-
+// VMArea Phase 1 -- WHP integration tests.
 #include <cstdio>
-#include <cstdlib>
+#include <functional>
 #include <string>
 #include <vector>
-#include <functional>
 
-#include "vmm/vmm.h"
 #include "devices/serial_console.h"
+#include "vmm/vmm.h"
 
-// ================================================================
-// Minimal test framework
-// ================================================================
+enum class TestResult { Pass, Fail, Skip };
 
 struct TestCase {
     const char* name;
-    std::function<bool()> fn;
+    std::function<TestResult()> run;
 };
 
-static std::vector<TestCase>& getTests() {
-    static std::vector<TestCase> tests;
-    return tests;
+static bool whpAvailable() {
+    vmarea::Vmm vmm;
+    return vmm.initialize();
 }
 
-#define TEST(testname)                                                         \
-    static bool test_##testname();                                             \
-    namespace {                                                                \
-    struct Reg_##testname {                                                    \
-        Reg_##testname() { getTests().push_back({#testname, test_##testname}); }\
-    } reg_##testname##_inst;                                                   \
-    }                                                                          \
-    static bool test_##testname()
+static TestResult requireWhp() {
+    if (!whpAvailable()) {
+        printf("    WHP is unavailable on this host.\n");
+        return TestResult::Skip;
+    }
+    return TestResult::Pass;
+}
 
-// ================================================================
-// Unit tests — SerialConsole (no WHP required)
-// ================================================================
-
-TEST(SerialConsole_Write) {
+static TestResult testSerialConsole() {
     vmarea::SerialConsole console;
+    std::string callbackOutput;
+    console.setOutputCallback([&callbackOutput](char value) { callbackOutput += value; });
     console.handleWrite(0x3F8, 'H');
     console.handleWrite(0x3F8, 'i');
-    return console.output() == "Hi";
+    console.handleWrite(0x3F9, '!');
+    return console.output() == "Hi" && callbackOutput == "Hi" &&
+           console.ownsPort(0x3F8) && console.ownsPort(0x3FF) &&
+           !console.ownsPort(0x3F7) && !console.ownsPort(0x400)
+        ? TestResult::Pass : TestResult::Fail;
 }
 
-TEST(SerialConsole_OwnsPort) {
-    vmarea::SerialConsole console;
-    return console.ownsPort(0x3F8)
-        && console.ownsPort(0x3FF)
-        && !console.ownsPort(0x3F7)
-        && !console.ownsPort(0x400);
-}
-
-TEST(SerialConsole_Callback) {
-    vmarea::SerialConsole console;
-    std::string received;
-    console.setOutputCallback([&](char c) { received += c; });
-    console.handleWrite(0x3F8, 'A');
-    console.handleWrite(0x3F8, 'B');
-    return received == "AB" && console.output() == "AB";
-}
-
-TEST(SerialConsole_Clear) {
-    vmarea::SerialConsole console;
-    console.handleWrite(0x3F8, 'X');
-    console.clear();
-    return console.output().empty();
-}
-
-TEST(SerialConsole_IgnoreNonDataPort) {
-    vmarea::SerialConsole console;
-    console.handleWrite(0x3F9, 'Z');  // Not the data port
-    return console.output().empty();
-}
-
-// ================================================================
-// Integration tests — require WHP (gracefully skip if unavailable)
-// ================================================================
-
-TEST(VMM_Initialize) {
+static TestResult testPartitionLifecycle() {
+    if (requireWhp() == TestResult::Skip) return TestResult::Skip;
     vmarea::Vmm vmm;
-    bool ok = vmm.initialize();
-    if (!ok) {
-        printf("    [SKIP] WHP not available on this system.\n");
-        return true;  // Not a failure — just unavailable hardware
+    return vmm.initialize() && vmm.createVm() && vmm.allocateMemory(64 * 1024) &&
+           vmm.createVcpu() ? TestResult::Pass : TestResult::Fail;
+}
+
+static TestResult testFullBoot(const std::string& guestImage) {
+    if (requireWhp() == TestResult::Skip) return TestResult::Skip;
+    vmarea::Vmm vmm;
+    if (!vmm.initialize() || !vmm.createVm() || !vmm.allocateMemory() ||
+        !vmm.createVcpu() || !vmm.loadGuest(guestImage) || !vmm.startGuest()) {
+        return TestResult::Fail;
     }
-    return true;
+    return vmm.consoleOutput() == "Darwin-like environment booted successfully.\r\n"
+        ? TestResult::Pass : TestResult::Fail;
 }
 
-TEST(VMM_CreateVm) {
-    vmarea::Vmm vmm;
-    if (!vmm.initialize()) { printf("    [SKIP]\n"); return true; }
-    if (!vmm.createVm()) return false;
-    vmm.shutdown();
-    return true;
-}
+int main(int argc, char* argv[]) {
+    const std::string guestImage = argc > 1 ? argv[1] : "guest_kernel.bin";
+    const std::vector<TestCase> tests = {
+        {"SerialConsole", testSerialConsole},
+        {"PartitionLifecycle", testPartitionLifecycle},
+        {"FullBootAndCleanHalt", [&guestImage] { return testFullBoot(guestImage); }},
+    };
 
-TEST(VMM_AllocateMemory) {
-    vmarea::Vmm vmm;
-    if (!vmm.initialize()) { printf("    [SKIP]\n"); return true; }
-    if (!vmm.createVm()) return false;
-    if (!vmm.allocateMemory(64 * 1024)) return false;  // 64 KB
-    vmm.shutdown();
-    return true;
-}
-
-TEST(VMM_CreateVcpu) {
-    vmarea::Vmm vmm;
-    if (!vmm.initialize()) { printf("    [SKIP]\n"); return true; }
-    if (!vmm.createVm()) return false;
-    if (!vmm.allocateMemory()) return false;
-    if (!vmm.createVcpu()) return false;
-    vmm.shutdown();
-    return true;
-}
-
-TEST(VMM_FullBoot) {
-    vmarea::Vmm vmm;
-    if (!vmm.initialize()) {
-        printf("    [SKIP] WHP not available.\n");
-        return true;
-    }
-    if (!vmm.createVm()) return false;
-    if (!vmm.allocateMemory()) return false;
-    if (!vmm.createVcpu()) return false;
-    if (!vmm.loadGuest("guest_kernel.bin")) {
-        printf("    [SKIP] guest_kernel.bin not found.\n");
-        vmm.shutdown();
-        return true;
-    }
-    if (!vmm.startGuest()) return false;
-
-    // Verify console output
-    const std::string& output = vmm.consoleOutput();
-    bool found = output.find("Darwin-like environment booted successfully.") != std::string::npos;
-    if (!found) {
-        printf("    Unexpected output: '%s'\n", output.c_str());
-    }
-    vmm.shutdown();
-    return found;
-}
-
-// ================================================================
-// Test runner
-// ================================================================
-
-int main() {
-    printf("=== VMArea Phase 1 — Test Suite ===\n\n");
-
-    const auto& tests = getTests();
-    int pass = 0, fail = 0;
-
-    for (const auto& t : tests) {
-        printf("[RUN ] %s\n", t.name);
-        bool ok = false;
-        try {
-            ok = t.fn();
-        } catch (...) {
-            printf("[FAIL] %s — unhandled exception\n\n", t.name);
-            fail++;
-            continue;
+    int passed = 0;
+    int failed = 0;
+    int skipped = 0;
+    for (const TestCase& test : tests) {
+        printf("[RUN ] %s\n", test.name);
+        const TestResult result = test.run();
+        if (result == TestResult::Pass) {
+            ++passed;
+            printf("[PASS] %s\n\n", test.name);
+        } else if (result == TestResult::Skip) {
+            ++skipped;
+            printf("[SKIP] %s\n\n", test.name);
+        } else {
+            ++failed;
+            printf("[FAIL] %s\n\n", test.name);
         }
-        printf("%s %s\n\n", ok ? "[PASS]" : "[FAIL]", t.name);
-        ok ? pass++ : fail++;
     }
-
-    int total = static_cast<int>(tests.size());
-    printf("=== Results: %d/%d passed, %d failed ===\n", pass, total, fail);
-    return fail > 0 ? 1 : 0;
+    printf("=== Results: %d passed, %d failed, %d skipped ===\n", passed, failed, skipped);
+    return failed == 0 ? 0 : 1;
 }

@@ -23,22 +23,20 @@ vmarea/
 │   ├── devices/
 │   │   ├── serial_console.h    # 8250/16550 UART emulation interface
 │   │   └── serial_console.cpp  # Port 0x3F8 I/O decode and stdout dispatch
-│   └── loader/
-│       ├── loader.h            # Binary payload reader interface
-│       └── loader.cpp          # Flat binary loader implementation
 ├── guest/
 │   └── kernel/
 │       └── kernel.asm          # Minimal 16-bit real-mode guest kernel
 ├── shared/
 │   └── types.h                 # Common typedefs, error codes, and constants
 └── tests/
-    └── test_vmm.cpp            # Test harness for host and device modules
+    ├── test_guest_sim.cpp      # Cross-platform device and guest simulation tests
+    └── test_vmm.cpp            # Windows WHP integration tests
 ```
 
 ### Component Responsibilities
 - **`host/vmm`**: High-level manager. Initializes the partition, configures properties, initializes memory, spawns vCPUs, coordinates exit handlers, and tears down state.
 - **`host/memory`**: Manages host allocations (`VirtualAlloc`) and maps them into the WHP partition via `WHvMapGpaRange`. Provides binary loading into GPA memory.
-- **`host/cpu`**: Manages the `WHV_EMULATOR_HANDLE` / virtual processor handles, sets initial register context (CS, IP, CR0, RFLAGS), and exposes `run()`.
+- **`host/cpu`**: Manages the single WHP virtual processor, sets its initial real-mode register context (CS, IP, CR0, RFLAGS), and exposes `run()`.
 - **`host/devices`**: Implements port-mapped I/O devices that hook into the VM exit loop.
 - **`guest/kernel`**: Standalone guest payload assembled into flat binary form.
 
@@ -118,19 +116,17 @@ if (exitContext.ExitReason == WHvRunVpExitReasonX64IoPortAccess) {
     uint16_t port = ioAccess.PortNumber;
 
     if (serialConsole_.ownsPort(port)) {
-        if (ioAccess.AccessInfo.IsWrite) {
-            serialConsole_.handleWrite(port, ioAccess.Data, ioAccess.AccessInfo.AccessSize);
-        } else {
-            // handle read...
+        if (ioAccess.AccessInfo.IsWrite && ioAccess.AccessInfo.AccessSize == 1) {
+            serialConsole_.handleWrite(port, static_cast<uint8_t>(ioAccess.Rax));
         }
     } else if (debugPort_.ownsPort(port)) {
         if (ioAccess.AccessInfo.IsWrite) {
-            debugPort_.handleWrite(port, ioAccess.Data, ioAccess.AccessInfo.AccessSize);
+            debugPort_.handleWrite(port, static_cast<uint32_t>(ioAccess.Rax),
+                                  ioAccess.AccessInfo.AccessSize);
         }
     }
 
-    // Advance RIP past the I/O instruction
-    advanceRip(exitContext.VpContext.InstructionLength);
+    // WHP resumes after the I/O instruction; do not modify RIP here.
 }
 ```
 
@@ -215,16 +211,16 @@ build\bin\Release\run-vm.exe build\guest_kernel.bin
 
 ## 6. Testing Strategy
 
-VMArea tests are segregated into two tiers in `tests/test_vmm.cpp`:
+VMArea tests are segregated into two tiers in `tests/`:
 
 1. **Unit Tests (No WHP Needed)**:
-   - Device logic (e.g., `SerialConsole::ownsPort`, character accumulation, LSR register emulation).
-   - Memory arithmetic and bounds checking.
+   - Device logic (e.g., `SerialConsole::ownsPort` and character accumulation).
+   - The assembled 16-bit guest's COM1 output and HLT behavior, simulated without WHP.
    - Run in any environment (including GitHub Actions or virtualized CI runners without nested virtualization).
 
 2. **Integration Tests (Require WHP)**:
    - Partition creation, register initialization, and real-mode execution loop.
-   - Capability probe: if `WHvGetCapability` reports WHP is unavailable, tests log a warning and gracefully skip instead of failing:
+   - Capability probe: if `WHvGetCapability` reports WHP is unavailable, tests report **SKIP**, not pass or fail. A missing guest binary is a failure because CMake makes it a test dependency.
      ```cpp
      BOOL present = FALSE;
      UINT32 bytes = 0;

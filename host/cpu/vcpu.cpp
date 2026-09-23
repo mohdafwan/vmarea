@@ -14,6 +14,10 @@ bool VirtualCpu::create(WHV_PARTITION_HANDLE partition, uint32_t vpIndex) {
         fprintf(stderr, "VirtualCpu: Already created.\n");
         return false;
     }
+    if (!partition) {
+        fprintf(stderr, "VirtualCpu: Invalid partition handle.\n");
+        return false;
+    }
 
     HRESULT hr = WHvCreateVirtualProcessor(partition, vpIndex, 0);
     if (FAILED(hr)) {
@@ -30,9 +34,9 @@ bool VirtualCpu::create(WHV_PARTITION_HANDLE partition, uint32_t vpIndex) {
 void VirtualCpu::destroy() {
     if (created_ && partition_) {
         WHvDeleteVirtualProcessor(partition_, vpIndex_);
-        created_  = false;
-        partition_ = nullptr;
     }
+    created_ = false;
+    partition_ = nullptr;
 }
 
 bool VirtualCpu::initializeRealMode(uint64_t entryPoint, uint64_t stackPointer) {
@@ -114,30 +118,16 @@ bool VirtualCpu::initializeRealMode(uint64_t entryPoint, uint64_t stackPointer) 
 }
 
 bool VirtualCpu::run(WHV_RUN_VP_EXIT_CONTEXT* exitContext) {
-    if (!created_) return false;
+    if (!created_ || !exitContext) {
+        fprintf(stderr, "VirtualCpu: Not created or invalid exit context.\n");
+        return false;
+    }
 
     HRESULT hr = WHvRunVirtualProcessor(
         partition_, vpIndex_, exitContext, sizeof(WHV_RUN_VP_EXIT_CONTEXT)
     );
     if (FAILED(hr)) {
         fprintf(stderr, "VirtualCpu: WHvRunVirtualProcessor failed (0x%08lX).\n", hr);
-        return false;
-    }
-    return true;
-}
-
-bool VirtualCpu::advanceInstructionPointer(const WHV_VP_EXIT_CONTEXT& vpContext) {
-    if (!created_) return false;
-
-    WHV_REGISTER_NAME  name  = WHvX64RegisterRip;
-    WHV_REGISTER_VALUE value = {};
-    value.Reg64 = vpContext.Rip + vpContext.InstructionLength;
-
-    HRESULT hr = WHvSetVirtualProcessorRegisters(
-        partition_, vpIndex_, &name, 1, &value
-    );
-    if (FAILED(hr)) {
-        fprintf(stderr, "VirtualCpu: Failed to advance RIP (0x%08lX).\n", hr);
         return false;
     }
     return true;

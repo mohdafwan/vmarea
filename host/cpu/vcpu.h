@@ -33,9 +33,6 @@ public:
     /// Run the vCPU until a VM exit occurs.
     bool run(WHV_RUN_VP_EXIT_CONTEXT* exitContext);
 
-    /// Advance the instruction pointer past the current instruction.
-    bool advanceInstructionPointer(const WHV_VP_EXIT_CONTEXT& vpContext);
-
     bool     isCreated() const { return created_; }
     uint32_t index()     const { return vpIndex_; }
 

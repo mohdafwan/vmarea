@@ -52,7 +52,7 @@ public:
     const std::string& consoleOutput() const;
 
 private:
-    void handleIoPortExit(const WHV_RUN_VP_EXIT_CONTEXT& exitContext);
+    bool handleIoPortExit(const WHV_RUN_VP_EXIT_CONTEXT& exitContext);
 
     WHV_PARTITION_HANDLE partition_ = nullptr;
     std::unique_ptr<GuestMemory>  memory_;

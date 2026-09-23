@@ -16,6 +16,10 @@ Vmm::~Vmm() {
 }
 
 bool Vmm::initialize() {
+    if (initialized_) {
+        return true;
+    }
+
     WHV_CAPABILITY capability = {};
     UINT32 written = 0;
 
@@ -46,6 +50,10 @@ bool Vmm::initialize() {
 bool Vmm::createVm() {
     if (!initialized_) {
         fprintf(stderr, "Error: VMM not initialized.\n");
+        return false;
+    }
+    if (vmCreated_ || partition_) {
+        fprintf(stderr, "Error: VM partition already created.\n");
         return false;
     }
 
@@ -88,6 +96,10 @@ bool Vmm::allocateMemory(size_t sizeBytes) {
         fprintf(stderr, "Error: VM not created.\n");
         return false;
     }
+    if (vcpu_) {
+        fprintf(stderr, "Error: Guest memory cannot be replaced after vCPU creation.\n");
+        return false;
+    }
 
     memory_ = std::make_unique<GuestMemory>();
     if (!memory_->initialize(partition_, 0, sizeBytes)) {
@@ -102,6 +114,14 @@ bool Vmm::allocateMemory(size_t sizeBytes) {
 bool Vmm::createVcpu() {
     if (!vmCreated_) {
         fprintf(stderr, "Error: VM not created.\n");
+        return false;
+    }
+    if (!memory_) {
+        fprintf(stderr, "Error: Guest memory must be allocated before creating a vCPU.\n");
+        return false;
+    }
+    if (vcpu_) {
+        fprintf(stderr, "Error: Virtual CPU #0 already created.\n");
         return false;
     }
 
@@ -128,13 +148,14 @@ bool Vmm::loadGuest(const std::string& imagePath) {
         return false;
     }
 
-    auto fileSize = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-
-    if (fileSize == 0) {
-        fprintf(stderr, "Error: Guest image is empty.\n");
+    const std::streampos end = file.tellg();
+    if (end <= 0) {
+        fprintf(stderr, "Error: Guest image is empty or its size could not be determined.\n");
         return false;
     }
+    const auto fileSize = static_cast<size_t>(end);
+    file.seekg(0, std::ios::beg);
+
     if (fileSize > memory_->size()) {
         fprintf(stderr, "Error: Guest image (%zu bytes) exceeds guest memory (%zu bytes).\n",
                 fileSize, memory_->size());
@@ -181,7 +202,9 @@ bool Vmm::startGuest() {
     uint32_t exitCount = 0;
     constexpr uint32_t MAX_EXITS = 100000;
 
-    // Real-time console output callback
+    // WHP reports an I/O-port exit after the I/O instruction has executed.
+    // VpContext.Rip already identifies the next instruction, so the VMM must
+    // not advance it again.
     console_->setOutputCallback([&prefixPrinted](char c) {
         if (!prefixPrinted) {
             printf("Guest: ");
@@ -207,8 +230,7 @@ bool Vmm::startGuest() {
 
         switch (exitCtx.ExitReason) {
         case WHvRunVpExitReasonX64IoPortAccess:
-            handleIoPortExit(exitCtx);
-            if (!vcpu_->advanceInstructionPointer(exitCtx.VpContext)) {
+            if (!handleIoPortExit(exitCtx)) {
                 running_ = false;
                 return false;
             }
@@ -227,9 +249,9 @@ bool Vmm::startGuest() {
             return false;
 
         case WHvRunVpExitReasonCanceled:
-            printf("Execution canceled.\n");
+            fprintf(stderr, "Error: Guest execution was canceled.\n");
             running_ = false;
-            break;
+            return false;
 
         default:
             fprintf(stderr, "Error: Unhandled VM exit %d (RIP=0x%llX).\n",
@@ -243,12 +265,20 @@ bool Vmm::startGuest() {
     return true;
 }
 
-void Vmm::handleIoPortExit(const WHV_RUN_VP_EXIT_CONTEXT& exitCtx) {
+bool Vmm::handleIoPortExit(const WHV_RUN_VP_EXIT_CONTEXT& exitCtx) {
     const auto& io = exitCtx.IoPortAccess;
-    if (io.AccessInfo.IsWrite && console_->ownsPort(io.PortNumber)) {
-        console_->handleWrite(io.PortNumber, static_cast<uint8_t>(io.Rax & 0xFF));
+    if (!io.AccessInfo.IsWrite || !console_->ownsPort(io.PortNumber)) {
+        fprintf(stderr, "Error: Unsupported I/O %s at port 0x%X.\n",
+                io.AccessInfo.IsWrite ? "write" : "read", io.PortNumber);
+        return false;
     }
-    // Phase 1: Ignore reads and unsupported ports
+    if (io.AccessInfo.AccessSize != 1) {
+        fprintf(stderr, "Error: Unsupported I/O write size %u at port 0x%X.\n",
+                io.AccessInfo.AccessSize, io.PortNumber);
+        return false;
+    }
+    console_->handleWrite(io.PortNumber, static_cast<uint8_t>(io.Rax));
+    return true;
 }
 
 void Vmm::shutdown() {

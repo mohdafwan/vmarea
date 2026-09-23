@@ -141,5 +141,5 @@ Phase 5 examines possibilities for integrating the virtualization platform with 
 ## Governance & Phase Discipline
 
 1. **Sequential Progression**: No code for Phase $N+1$ may be committed until Phase $N$ has achieved its defined verification targets.
-2. **Backward Compatibility**: Enhancements introduced in subsequent phases must not break the ability to run minimal real-mode payloads like the Phase 1 guest.
+2. **Backward Compatibility**: Any future enhancement must preserve the ability to run the minimal real-mode Phase 1 payload, including its COM1 banner and clean HLT exit.
 3. **Speculative Boundary**: Phases 4 and 5 are open-ended research investigations; their deliverables depend on feasibility assessments gathered during Phase 3.

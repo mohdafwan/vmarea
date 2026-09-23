@@ -74,12 +74,11 @@ vmarea/
 │   ├── memory/               # Guest physical memory (guest_memory.h, guest_memory.cpp)
 │   ├── cpu/                  # Virtual CPU management (vcpu.h, vcpu.cpp)
 │   ├── devices/              # Virtual I/O devices (serial_console.h, serial_console.cpp)
-│   └── loader/               # Guest binary/payload loader
 ├── guest/
 │   ├── kernel/               # 16-bit real-mode guest kernel (kernel.asm)
 │   └── boot/                 # Boot protocol definitions
 ├── shared/                   # Common types and definitions (types.h)
-├── tests/                    # Unit and integration tests (test_vmm.cpp)
+├── tests/                    # Cross-platform simulation and Windows WHP tests
 ├── tools/                    # Utility scripts and tooling
 ├── CMakeLists.txt            # Root CMake build configuration
 ├── build.cmd                 # Automated Windows build script
@@ -110,7 +109,7 @@ Open an **x64 Native Tools Command Prompt for VS** (or Command Prompt with build
    ```cmd
    build.cmd
    ```
-   This assembles the guest kernel (`guest_kernel.bin`) and compiles the host VMM executables (`run-vm.exe` and `test_vmm.exe`) into `build\bin\Release\`.
+   This assembles the guest kernel (`guest_kernel.bin`) and compiles the host VMM executables (`run-vm.exe` and `vmarea-tests.exe`) into `build\bin\Release\`. On non-Windows hosts, CMake builds the cross-platform `vmarea-sim-tests` suite only.
 
 2. **Run the Virtual Machine**
    ```cmd
@@ -129,16 +128,22 @@ Open an **x64 Native Tools Command Prompt for VS** (or Command Prompt with build
 When running `run-vm.cmd`, the VMM boots the guest payload in the WHP partition, captures serial output from COM1, and halts upon receiving the guest `hlt` instruction:
 
 ```text
-[VMM] Initializing Windows Hypervisor Platform...
-[VMM] Partition created and configured.
-[VMM] Mapped 1048576 bytes of guest memory at GPA 0x0.
-[VMM] Loaded guest binary (size: 64 bytes) at GPA 0x0.
-[VMM] Virtual processor 0 created and registers initialized.
-[VMM] Starting guest execution...
-Darwin-like environment booted successfully.
-[VMM] Guest execution halted cleanly (Exit Reason: WHvRunVpExitReasonHalt).
-[VMM] Cleaning up VM partition...
-[VMM] VM execution completed.
+=== VMArea Phase 1 — Darwin-like Virtualization Environment ===
+
+Initializing VMM...
+  WHP hypervisor detected.
+Creating VM...
+  VM partition created.
+Allocating guest memory...
+  Allocated 1048576 bytes of guest memory at GPA 0x0.
+Creating virtual CPU...
+  Virtual CPU #0 created.
+Loading guest kernel...
+  Loaded 512 bytes from 'build\guest_kernel.bin'.
+Starting guest...
+Guest: Darwin-like environment booted successfully.
+Guest halted.
+VM stopped successfully.
 ```
 
 ---
@@ -147,10 +152,10 @@ Darwin-like environment booted successfully.
 
 For in-depth technical details, refer to the documents in `docs/`:
 
-- [**Architecture Specification**](file:///home/af3an/xstudio/vmarea/docs/ARCHITECTURE.md): System design, WHP API flow, memory layout, register initialization, exit handling, and security model.
-- [**Build Guide**](file:///home/af3an/xstudio/vmarea/docs/BUILD.md): Detailed installation instructions, feature configuration, manual build steps, and troubleshooting.
-- [**Development Guide**](file:///home/af3an/xstudio/vmarea/docs/DEVELOPMENT.md): Adding virtual devices, modifying the guest kernel, coding conventions, debugging techniques, and non-goals.
-- [**Project Roadmap**](file:///home/af3an/xstudio/vmarea/docs/ROADMAP.md): Evolutionary milestones from Phase 1 proof-of-concept through prospective long-mode and Darwin/XNU research.
+- [**Architecture Specification**](docs/ARCHITECTURE.md): System design, WHP API flow, memory layout, register initialization, exit handling, and security model.
+- [**Build Guide**](docs/BUILD.md): Detailed installation instructions, feature configuration, manual build steps, and troubleshooting.
+- [**Development Guide**](docs/DEVELOPMENT.md): Adding virtual devices, modifying the guest kernel, coding conventions, debugging techniques, and non-goals.
+- [**Project Roadmap**](docs/ROADMAP.md): Evolutionary milestones from Phase 1 proof-of-concept through prospective long-mode and Darwin/XNU research.
 
 ---
 

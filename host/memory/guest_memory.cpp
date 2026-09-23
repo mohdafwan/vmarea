@@ -1,6 +1,7 @@
 #include "guest_memory.h"
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 namespace vmarea {
 
@@ -20,12 +21,21 @@ bool GuestMemory::initialize(WHV_PARTITION_HANDLE partition, uint64_t gpa, size_
         return false;
     }
 
-    partition_ = partition;
-    gpa_ = gpa;
-
     // Round up to 4 KB page boundary
     constexpr size_t PAGE_SIZE = 4096;
+    if ((gpa % PAGE_SIZE) != 0 || sizeBytes > std::numeric_limits<size_t>::max() - (PAGE_SIZE - 1)) {
+        fprintf(stderr, "GuestMemory: GPA must be page aligned and size must be representable.\n");
+        return false;
+    }
     size_ = (sizeBytes + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (gpa > std::numeric_limits<uint64_t>::max() - size_) {
+        fprintf(stderr, "GuestMemory: GPA range overflows.\n");
+        size_ = 0;
+        return false;
+    }
+
+    partition_ = partition;
+    gpa_ = gpa;
 
     // Allocate page-aligned host memory
     hostMemory_ = VirtualAlloc(nullptr, size_, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -46,6 +56,9 @@ bool GuestMemory::initialize(WHV_PARTITION_HANDLE partition, uint64_t gpa, size_
         fprintf(stderr, "GuestMemory: WHvMapGpaRange failed (0x%08lX).\n", hr);
         VirtualFree(hostMemory_, 0, MEM_RELEASE);
         hostMemory_ = nullptr;
+        partition_ = nullptr;
+        gpa_ = 0;
+        size_ = 0;
         return false;
     }
 
@@ -64,11 +77,13 @@ void GuestMemory::cleanup() {
         hostMemory_ = nullptr;
     }
     initialized_ = false;
+    partition_ = nullptr;
+    gpa_ = 0;
+    size_ = 0;
 }
 
 bool GuestMemory::write(uint64_t offset, const void* data, size_t length) const {
-    if (!initialized_) return false;
-    if (offset + length > size_) {
+    if (!initialized_ || (!data && length != 0) || offset > size_ || length > size_ - offset) {
         fprintf(stderr, "GuestMemory: Write out of bounds (offset=0x%llX, len=%zu, size=%zu).\n",
                 (unsigned long long)offset, length, size_);
         return false;
@@ -78,8 +93,7 @@ bool GuestMemory::write(uint64_t offset, const void* data, size_t length) const 
 }
 
 bool GuestMemory::read(uint64_t offset, void* buffer, size_t length) const {
-    if (!initialized_) return false;
-    if (offset + length > size_) {
+    if (!initialized_ || (!buffer && length != 0) || offset > size_ || length > size_ - offset) {
         fprintf(stderr, "GuestMemory: Read out of bounds (offset=0x%llX, len=%zu, size=%zu).\n",
                 (unsigned long long)offset, length, size_);
         return false;
